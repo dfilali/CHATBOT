@@ -10,127 +10,106 @@ from langchain.schema import Document
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from langchain.embeddings import HuggingFaceEmbeddings
 
+# Load embeddings
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# Charger les données depuis le fichier JSONL
+# Load product data
 product_data = pd.read_json('meta.jsonl', lines=True)
-print(product_data.head())
 
-# Extraire les descriptions de chaque produit
-descriptions = product_data['description'].fillna("").tolist()
-print(descriptions)
+# Process descriptions
+descriptions = product_data['description'].apply(
+    lambda x: " ".join(x) if isinstance(x, list) else str(x)
+).fillna("").tolist()
 
-# Configurer le séparateur
+# Split descriptions into chunks
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=256,  # Taille de chaque chunk
-    chunk_overlap=40  # Chevauchement entre les chunks
+    chunk_size=256,
+    chunk_overlap=40
 )
-
-# Diviser les descriptions en chunks
 segmented_texts = []
 for description in descriptions:
-    if description:  # Si la description existe
-        chunks = text_splitter.split_text(" ".join(description))
+    if description:
+        chunks = text_splitter.split_text(description)
         segmented_texts.extend(chunks)
 
-print(f"Nombre total de chunks créés : {len(segmented_texts)}")
-print("Exemple de chunk :", segmented_texts[:2])
-
-# Utiliser un modèle d'embeddings de Sentence-Transformer
+# Create embeddings
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-# Générer les embeddings pour les segments
 embeddings = embedding_model.encode(segmented_texts)
-
-# Convertir les embeddings en numpy.ndarray
 embeddings_np = np.array(embeddings)
 
-# Vérifier la dimension des embeddings
-dimension = embeddings_np[0].shape[0]  # Dimension des vecteurs d'embeddings
-print(f"Dimension des embeddings : {dimension}")
-
-# Créer un index FAISS pour les embeddings
-index = faiss.IndexFlatL2(dimension)  # Index basé sur la distance euclidienne
-
-# Ajouter les embeddings à l'index
+# Create FAISS index
+dimension = embeddings_np[0].shape[0]
+index = faiss.IndexFlatL2(dimension)
 index.add(embeddings_np)
 
-print(f"Nombre de vecteurs indexés : {index.ntotal}")
-
-# Créer les documents
+# Create documents and vector store
 documents = [Document(page_content=text) for text in segmented_texts]
-
-# Créer un mapping d'index pour les documents
 docstore = InMemoryDocstore({str(i): doc for i, doc in enumerate(documents)})
 index_to_docstore_id = {i: str(i) for i in range(len(documents))}
-
-# Créer un vector store avec FAISS
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vector_store = FAISS(
-    embedding_function=embeddings,
+    embedding_function=HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2"),
     index=index,
     docstore=docstore,
     index_to_docstore_id=index_to_docstore_id
 )
 
-# Configurer un retriever pour rechercher les descriptions pertinentes
+# Create retriever
 retriever = vector_store.as_retriever()
 
-# Charger le modèle Bloom depuis Hugging Face
-model_name = "bigscience/bloom-560m"  # Vous pouvez utiliser un modèle plus grand, si besoin
+# Load Bloom model
+model_name = "bigscience/bloom-560m"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForCausalLM.from_pretrained(model_name)
 
-# Configurer le pipeline de génération
-bloom_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer, max_length=512)
+# Create Bloom pipeline
+bloom_pipeline = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_length=512,
+    truncation=True
+)
 
-# Fonction pour formuler le prompt structuré
-def create_structured_prompt(retrieved_docs, question):
+# Improved prompt engineering function
+def create_improved_prompt(retrieved_docs, question, product_category):
     documents = "\n".join([doc.page_content for doc in retrieved_docs])
     prompt = f"""
-    Vous êtes un assistant intelligent conçu pour répondre aux questions des utilisateurs en utilisant exclusivement les informations contenues dans les documents fournis ci-dessous.
-    Vous ne devez **pas** faire appel à vos connaissances internes ni générer d'informations supplémentaires ou incorrectes qui ne sont pas présentes dans ces documents.
+    **Product Category:** {product_category}
 
-    Voici les instructions à suivre :
-    1. Utilisez **uniquement les informations présentes dans les documents fournis** pour répondre à la question.
-    2. Si une réponse ne peut être trouvée dans les documents, répondez **clairement que vous ne savez pas**.
-    3. Lorsque vous fournissez une réponse, **citez précisément les passages** ou les documents d'où vous avez extrait l'information.
-    4. **Ne générez pas d'informations sensibles, inappropriées ou potentiellement incorrectes**. Limitez-vous aux informations contenues dans les documents.
-
-    Documents fournis :
-    {documents}
-
-    Question :
+    **Prompt:**
     {question}
 
-    Veuillez répondre uniquement à partir des documents ci-dessus. Si vous ne trouvez pas d'information pertinente, répondez simplement : "Je ne sais pas."
+    **Relevant Information:**
+    {documents}
+
+    **Response:**
+    Provide a comprehensive and informative answer based on the given information. If the answer cannot be found in the information, state "I don't know."
     """
     return prompt
 
-# Exemple de requête utilisateur
-# Exemple de requête utilisateur
-query = "Tell me about OnePlus 6T"
+# Example query
+query = "who is macron ?"
 
-# Récupération des documents pertinents
+# Retrieve relevant documents
 try:
     retrieved_docs = retriever.get_relevant_documents(query)
-    print(f"Documents récupérés ({len(retrieved_docs)}) :")
-    for doc in retrieved_docs[:3]:  # Afficher un exemple des trois premiers documents
+    print(f"Retrieved documents ({len(retrieved_docs)}):")
+    for doc in retrieved_docs[:3]:
         print(doc.page_content)
 except Exception as e:
-    print(f"Erreur lors de la récupération des documents : {str(e)}")
-    retrieved_docs = []  # Initialisation à vide en cas d'erreur
+    print(f"Error retrieving documents: {e}")
+    retrieved_docs = []
 
-# Vérification que des documents ont été récupérés
+# Generate response
 if retrieved_docs:
-    structured_prompt = create_structured_prompt(retrieved_docs, query)
-    print(f"Prompt structuré créé : {structured_prompt}")
-    
-    # Vérifier la configuration du pipeline avant de passer au modèle Bloom
+    product_category = product_data['main_category'][0]  # Assuming category is the first column
+    structured_prompt = create_improved_prompt(retrieved_docs, query, product_category)
+    print(f"Improved prompt: {structured_prompt}")
+
     try:
         response = bloom_pipeline(structured_prompt)
-        print(f"Réponse du modèle : {response[0]['generated_text']}")
+        print(f"Generated response: {response[0]['generated_text']}")
     except Exception as e:
-        print(f"Erreur lors de la génération de texte avec Bloom : {str(e)}")
+        print(f"Error generating text with Bloom: {e}")
 else:
-    print("Aucun document trouvé pour créer le prompt structuré.")
+    print("No documents found to process the query.")
