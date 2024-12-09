@@ -1,15 +1,18 @@
-from Splitter import decouper_textes
-from EmbeddingGeneration import generer_embeddings
+import streamlit as st
+from model import generate_response
 
-# Chemin vers le fichier JSON Lines
-fichier = 'meta.jsonl'
+# Titre de l'application Streamlit
+st.title("Product Information Query")
 
-# Étape 1 : Charger et découper les textes
-split_texts = decouper_textes(fichier)
+# Demande de la requête utilisateur
+query = st.text_input("Enter your query:")
 
-# Étape 2 : Générer les embeddings
-embeddings = generer_embeddings(split_texts)
+# Paramètres pour ajuster la génération du texte
+temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
+top_p = st.slider("Top-p", min_value=0.0, max_value=1.0, value=0.9, step=0.1)
 
-# Étape 3 : Afficher un aperçu des résultats
-for i, emb in enumerate(embeddings[:5]):
-    print(f"Texte segmenté {i+1} - Embedding : {emb[:5]}")  # Afficher les 5 premières valeurs de chaque embedding
+# Si une requête est fournie, générer et afficher la réponse
+if query:
+    response = generate_response(query, temperature=temperature, top_p=top_p)
+    st.write("**Generated Response:**")
+    st.write(response)
